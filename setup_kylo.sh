@@ -6,6 +6,7 @@ source ./all_config.properties
 yes_no="^[yYnN]{1}$"
 INSTALL_HOME="/opt/kylo"
 old_pwd=`pwd`
+
 function install_mysql_opt(){
     echo "start install mysql mysql-server mysql-devel ...."
     # systemctl stop mysql.service
@@ -24,6 +25,17 @@ function install_mysql_opt(){
     echo " "
     echo " "
     echo "设置root命令可用 : mysqladmin -uroot password \"123456\""
+}
+
+# function for determining way to handle startup scripts
+function get_linux_type (){
+    # redhat
+    which chkconfig > /dev/null && echo "chkonfig" && return 0
+    # ubuntu sysv
+    which update-rc.d > /dev/null && echo "update-rc.d" && return 0
+    echo "Couldn't recognize linux version, after installation you need to do these steps manually:"
+    echo " * add proper header to /etc/init.d/{kylo-ui,kylo-services,kylo-spark-shell} files"
+    echo " * set them to autostart"
 }
 
 
@@ -183,74 +195,111 @@ function install_activemq_opt(){
 
 function install_elasticsearch_opt(){
 
-      if [[ -z $JAVA_HOME ]]; then
-      	#statements
-      	echo "请先安装jdk8，并设置JAVA_HOME环境变量后继续..."
-      	exit 1
-      fi
-
       echo "Installing Elasticsearch"
 
-      ELASTICSEARCH_HOME=/opt/elastechsearch
-
-      elasticsearch_tar=elasticsearch-*.tar.gz
-
-      es_instal_home=$ELASTICSEARCH_HOME/elasticsearch-6.3.1
-
-      
-     
-
-      
-      if [[ ! -d ELASTICSEARCH_HOME ]]; then
-         #statements
-          mkdir -p $ELASTICSEARCH_HOME
+      if [[ -z $JAVA_HOME ]]; then
+        echo "请先安装jdk8，并设置JAVA_HOME环境变量后继续..."
+        exit 1
       fi
 
-        # setp1 为es 创建用户
-      echo " "
-      read -p "Enter your userName for elastechsearch , hit Enter for 'esadmin':" es_userName
 
-      # if -z 如果字符串为空 
-      if [[ -z "$es_userName" ]]; then
-          es_userName="esadmin"
+      linux_type=$(get_linux_type)
 
+
+      # curl -O -k https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-5.5.0.rpm
+      # curl -O -k https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-5.5.0.deb
+
+      cd elasticsearch
+
+      if [ "$linux_type" == "chkonfig" ]; then
+
+        
+          echo "Executing RPM"
+          rpm -ivh elasticsearch-5.5.0.rpm
+          echo "Setup elasticsearch as a service"
+          sudo chkconfig --add elasticsearch
+
+      elif [ "$linux_type" == "update-rc.d" ]; then
+
+        
+          echo "Executing DEB"
+          dpkg -i elasticsearch-5.5.0.deb
+          echo "Setup elasticsearch as a service"
+          update-rc.d elasticsearch defaults 95 10
       fi
 
-      echo "hello $es_userName"
 
-      read -p "Enter your group for $es_userName , hit Enter with $es_userName as group:" es_userGroup
 
-      if [[ -z "$es_userGroup" ]]; then
-          es_userGroup=$es_userName
+      sed -i "s|#cluster.name: my-application|cluster.name: demo-cluster|" /etc/elasticsearch/elasticsearch.yml
+      sed -i "s|#network.host: 192.168.0.1|network.host: 0.0.0.0|" /etc/elasticsearch/elasticsearch.yml
 
+
+      echo "JAVA_HOME=$JAVA_HOME" >> /etc/sysconfig/elasticsearch
+
+
+      echo "Starting Elasticsearch"
+      sudo service elasticsearch start
+
+      echo "Elasticsearch install complete"
+
+      SERVICE='elasticsearch'
+
+      function check_service {
+              if service $SERVICE status | grep running > /dev/null
+              then
+                #echo "$SERVICE is running"
+                      retval=0
+              else
+                #echo "$SERVICE is NOT running"
+                      retval=1
+              fi
+      }
+
+      retval=1
+      numtries=1
+      maxtries=10
+
+      echo "Waiting for $SERVICE service to start ..."
+      while [ "$retval" != 0 ]
+      do
+              echo "."
+              sleep 1s
+              check_service
+              ((numtries++))
+
+              if [ "$numtries" -gt "$maxtries" ]
+              then
+                      echo "Timeout reached"
+                      break
+              fi
+      done
+
+      if [ "$retval" == 0 ]
+      then
+              echo "Waiting for 10 seconds for the engine to start up, and then will create Kylo indexes in Elasticsearch."
+              echo "NOTE: If they already exist, an index_already_exists_exception will be reported. This is OK."
+              sleep 10s
+              $INSTALL_HOME/bin/create-kylo-indexes-es.sh 127.0.0.1 9200 1 1
+      else
+              echo "$SERVICE service did not start within a reasonable time. Please check and start it. Then, execute this script manually before starting Kylo."
+              echo "This script will create Kylo indexes in Elasticsearch."
+              echo "NOTE: If they already exist, an index_already_exists_exception will be reported. This is OK."
+              echo "$INSTALL_HOME/bin/create-kylo-indexes-es.sh 127.0.0.1 9200 1 1"
       fi
 
-      useradd $es_userName
-      groupadd $es_userGroup 
-      usermod -G $es_userGroup $es_userName
+      echo "Elasticsearch index creation complete"
       
-      tar xzvf $elasticsearch_tar -C $ELASTICSEARCH_HOME
-      cd $es_instal_home
-      mkdir logs data
-      #为es用户添加elasticsearch-6.3.1权限
-      chown -R $es_userName:$es_userGroup $ELASTICSEARCH_HOME/elasticsearch-6.3.1/*
-      sed -i "s|#path.logs: /path/to/logs|path.logs: $es_instal_home/logs|" $es_instal_home/config/elasticsearch.yml
-      # 配置elastech的host 使外网能够访问
-
-      sed -i "s|#network.host: 192.168.0.1|network.host: 0.0.0.0|" $es_instal_home/config/elasticsearch.yml
-
-
       # 这里追加不好，要改
-      echo "vm.max_map_count=855360" >> /etc/sysctl.conf
+      # echo "vm.max_map_count=855360" >> /etc/sysctl.conf
 
-      # sed -i "s|vm.max_map_count=.*|vm.max_map_count=855360|" /etc/sysctl.conf
+      # # sed -i "s|vm.max_map_count=.*|vm.max_map_count=855360|" /etc/sysctl.conf
 
-      # 这里追加不好，要改
-      echo "*        hard    nofile           65536" >>/etc/security/limits.conf
-      # 这里追加不好，要改
-      echo "*        soft    nofile           65536" >>/etc/security/limits.conf
+      # # 这里追加不好，要改
+      # echo "*        hard    nofile           65536" >>/etc/security/limits.conf
+      # # 这里追加不好，要改
+      # echo "*        soft    nofile           65536" >>/etc/security/limits.conf
 
-      sysctl -p 
+      # sysctl -p 
 
 }
 
@@ -685,6 +734,18 @@ function config_kylo_opt(){
     spark_file="/opt/kylo/kylo-services/conf/spark.properties"
     KYLO_SERVICEES_FOLDER="/opt/kylo/kylo-services"
 
+
+      hive_site="/etc/hive/conf/hive-site.xml"
+      
+      if [[ ! -f "$hive_site" ]]; then
+        #statements
+        cp /etc/hive/conf/hive-site.xml /etc/spark/conf/hive-site.xml
+      
+      fi
+
+      echo "spark.io.compression.codec=lz4" >> /etc/spark/conf/spark-defaults.conf
+
+
       sed -i "s|spring.datasource.url=.*|spring.datasource.url=jdbc:mysql://$mysql_kylo_db_host:3306/kylo|"  $CONFIG_HOME/application.properties
 
       sed -i "s|spring.datasource.username=.*|spring.datasource.username=$mysql_kylo_db_user|" $CONFIG_HOME/application.properties
@@ -708,6 +769,10 @@ function config_kylo_opt(){
 
       sed -i "s|nifi.rest.host.*|nifi.rest.host=$kylo_local_ip|" $CONFIG_HOME/application.properties
 
+      sed -i "s|hive.userImpersonation.enabled=.*|hive.userImpersonation.enabled=true|" $CONFIG_HOME/application.properties
+      sed -i "s|hive.metastore.datasource.username=.*|hive.metastore.datasource.username=$hive_metastore_datasource_username|"  $CONFIG_HOME/application.properties
+      sed -i "s|hive.metastore.datasource.password=.*|hive.metastore.datasource.password=$hive_metastore_datasource_password|" $CONFIG_HOME/application.properties
+      
       sed -i "s|nifi.service.mysql.database_user=.*|nifi.service.mysql.database_user=$mysql_kylo_db_user|" $CONFIG_HOME/application.properties
 
       sed -i "s|nifi.service.mysql.password=.*|nifi.service.mysql.password=$mysql_kylo_db_password|" $CONFIG_HOME/application.properties
@@ -904,6 +969,8 @@ function kyloMenu (){
   `echo -e "\033[35m 4)  拷贝userdata1.csv.......\033[0m"`
   `echo -e "\033[35m 5） 为kylo创建elastechsearch索引  ..........\033[0m"`
   `echo -e "\033[35m 0)  返回主菜单..........\033[0m"`
+  
+  `echo -e "\033[35m q) 退出\033[0m"`
   `echo ""`
   `echo ""`
   `echo ""`
@@ -939,7 +1006,7 @@ EOF
       echo ""
       copy_userdata_2_dropzone
       echo ""
-      mainMenu
+      kyloMenu
       ;;
     5)
       echo ""
@@ -952,25 +1019,22 @@ EOF
        mainMenu
        echo ""
        ;;
+    q)
+       echo ""
+       echo "bye!!"
+       echo ""
+       exit
+       ;;
     * )
         echo ""
         echo "您的输入有误，请重新输入"
-        mainMenu
+        kyloMenu
         echo ""
         ;;
   esac
 }
 
-# function for determining way to handle startup scripts
-function get_linux_type (){
-    # redhat
-    which chkconfig > /dev/null && echo "chkonfig" && return 0
-    # ubuntu sysv
-    which update-rc.d > /dev/null && echo "update-rc.d" && return 0
-    echo "Couldn't recognize linux version, after installation you need to do these steps manually:"
-    echo " * add proper header to /etc/init.d/{kylo-ui,kylo-services,kylo-spark-shell} files"
-    echo " * set them to autostart"
-}
+
 
 function install_nifi_opt (){
 
@@ -1165,7 +1229,7 @@ function mainMenu (){
   `echo -e "\033[35m 9)  安装jce_policy\033[0m"`
   `echo -e "\033[35m 10) 停止kylo 、 nifi 、删除nifi[可选].......\033[0m"`
 
-  `echo -e "\033[35m 0) 退出\033[0m"`
+  `echo -e "\033[35m q) 退出\033[0m"`
   `echo ""`
   `echo ""`
   `echo ""`
@@ -1252,7 +1316,7 @@ EOF
         echo ""
         mainMenu
         ;;
-      0)
+      q)
         echo ""
         echo "bye!!"
         echo ""
