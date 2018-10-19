@@ -206,14 +206,15 @@ function install_elasticsearch_opt(){
       linux_type=$(get_linux_type)
 
 
-      # curl -O -k https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-5.5.0.rpm
-      # curl -O -k https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-5.5.0.deb
+      
+      
 
       cd elasticsearch
 
       if [ "$linux_type" == "chkonfig" ]; then
 
-        
+          echo "download elasticsearch ..."
+          curl -O -k https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-5.5.0.rpm  
           echo "Executing RPM"
           rpm -ivh elasticsearch-5.5.0.rpm
           echo "Setup elasticsearch as a service"
@@ -221,7 +222,8 @@ function install_elasticsearch_opt(){
 
       elif [ "$linux_type" == "update-rc.d" ]; then
 
-        
+          echo "download elasticsearch ..."
+          # curl -O -k https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-5.5.0.deb  
           echo "Executing DEB"
           dpkg -i elasticsearch-5.5.0.deb
           echo "Setup elasticsearch as a service"
